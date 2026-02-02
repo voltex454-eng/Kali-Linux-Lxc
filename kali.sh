@@ -1,10 +1,8 @@
-
 #!/bin/bash
 
 # ==========================================
 #  Kali Linux LXC + VNC + Pinggy Automation
-#  Based on Official Docs
-#  Mode: Universal (Auto-Arch & Fallback)
+#  Mode: Privileged (Fixes 'Failed ID' Error) 🛡️
 # ==========================================
 
 # --- Color Definitions ---
@@ -21,7 +19,7 @@ set +e
 
 # --- 1. Environment Detection ---
 echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Doc Fix) 🐉${NC}   "
+echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Privileged) 🐉${NC}   "
 echo -e "${BOLD}${CYAN}============================================${NC}"
 
 if [ "$CODESPACES" == "true" ]; then
@@ -34,21 +32,15 @@ fi
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
 sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored...${NC}"
 
-# Try installing LXD via APT first (Faster in containers)
+# Install LXD
 if ! command -v lxd &> /dev/null; then
-    echo -e "${BLUE}🛠️  Installing LXD (Method 1: APT)...${NC}"
-    sudo apt-get install -y lxd lxd-client || echo -e "${YELLOW}APT install failed. Trying Snap...${NC}"
+    echo -e "${BLUE}🛠️  Installing LXD...${NC}"
+    sudo apt-get install -y lxd lxd-client || sudo snap install lxd
 fi
 
-# Fallback to SNAP (As per Official Docs)
-if ! command -v lxd &> /dev/null; then
-    echo -e "${BLUE}🛠️  Installing LXD (Method 2: SNAP)...${NC}"
-    sudo snap install lxd || echo -e "${RED}LXD install failed. Please install LXD manually.${NC}"
-fi
-
-# Initialize LXD
+# Initialize LXD (if not ready)
 if ! sudo lxd waitready --timeout 15 2>/dev/null; then
-    echo -e "${YELLOW}⚙️  Initializing LXD (Auto Mode)...${NC}"
+    echo -e "${YELLOW}⚙️  Initializing LXD...${NC}"
     cat <<EOF | sudo lxd init --preseed
 config: {}
 networks:
@@ -83,11 +75,9 @@ EOF
 fi
 
 # --- 3. Fix Image Remote ---
-# Explicitly add the images server as per docs
-echo -e "${BLUE}🌍 syncing Image Server...${NC}"
 sudo lxc remote add images https://images.linuxcontainers.org --protocol=simplestreams --accept-certificate 2>/dev/null || true
 
-# --- 4. Container Launch (The Fix) ---
+# --- 4. Container Launch (Privileged Fix) ---
 CONTAINER_NAME="kali-gui"
 
 # Cleanup old container
@@ -97,26 +87,21 @@ if sudo lxc list | grep -q "$CONTAINER_NAME"; then
     sudo lxc delete "$CONTAINER_NAME" 2>/dev/null
 fi
 
-echo -e "${BLUE}🚀 Downloading and launching Kali Linux container...${NC}"
+echo -e "${BLUE}🚀 Launching Kali Linux container (Privileged Mode)...${NC}"
 
-# Try multiple image names to bypass "Not Found" error
-# Attempt 1: Rolling (Best for updates)
-if sudo lxc launch images:kali/rolling "$CONTAINER_NAME"; then
-    echo -e "${GREEN}✅ Success! Image used: images:kali/rolling${NC}"
-
-# Attempt 2: Current (As per Docs)
-elif sudo lxc launch images:kali/current "$CONTAINER_NAME"; then
-    echo -e "${GREEN}✅ Success! Image used: images:kali/current${NC}"
-
-# Attempt 3: Generic
-elif sudo lxc launch images:kali "$CONTAINER_NAME"; then
-    echo -e "${GREEN}✅ Success! Image used: images:kali (Generic)${NC}"
-
+# FIX: Added '-c security.privileged=true -c security.nesting=true'
+# This bypasses the ID mapping error seen in your screenshot.
+if sudo lxc launch images:kali "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
+    echo -e "${GREEN}✅ Success! Kali Container Launched.${NC}"
 else
-    echo -e "${RED}❌ Error: Could not find any Kali image.${NC}"
-    echo -e "${YELLOW}Debug Info - Available Images:${NC}"
-    sudo lxc image list images:kali
-    exit 1
+    # Fallback to rolling if simple alias fails
+    echo -e "${YELLOW}⚠️  Retrying with 'rolling' tag...${NC}"
+    if sudo lxc launch images:kali/rolling "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
+         echo -e "${GREEN}✅ Success! Kali Rolling Launched.${NC}"
+    else
+         echo -e "${RED}❌ Error: Launch failed. Check logs.${NC}"
+         exit 1
+    fi
 fi
 
 echo -e "${YELLOW}⏳ Waiting for network...${NC}"
@@ -124,12 +109,11 @@ sleep 10
 
 # --- 5. Installing GUI & VNC ---
 echo -e "\n${CYAN}📦 Installing XFCE Desktop, VNC, and noVNC...${NC}"
-echo -e "${YELLOW}☕  (This WILL take time. Don't close the terminal...)${NC}"
+echo -e "${YELLOW}☕  (This takes time! Don't close terminal...)${NC}"
 
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || true
-    # Installing kali-defaults as referenced in docs, plus VNC
     apt-get install -y kali-linux-default xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh
 " > /dev/null 2>&1
 
