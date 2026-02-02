@@ -3,7 +3,7 @@
 # ==========================================
 #  Kali Linux LXC + VNC + Pinggy Automation
 #  Mode: Silent & Stealthy 🥷
-#  By: Gemini
+#  Fix: Ignores Update Errors
 # ==========================================
 
 # --- Color Definitions ---
@@ -32,7 +32,9 @@ fi
 
 # --- 2. Host Setup (LXD) ---
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
-sudo apt-get update -qq
+
+# FIX: Added '|| true' so script doesn't stop if Yarn repo fails
+sudo apt-get update || echo -e "${YELLOW}⚠️  Update had warnings, proceeding anyway...${NC}"
 
 if ! command -v lxd &> /dev/null; then
     echo -e "${BLUE}🛠️  Installing LXD...${NC}"
