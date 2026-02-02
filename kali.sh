@@ -3,7 +3,7 @@
 # ==========================================
 #  Kali Linux LXC + VNC + Pinggy Automation
 #  Mode: Silent & Stealthy 🥷
-#  Fix: Ignores Update Errors
+#  Fix: Bypasses Apt Update Errors
 # ==========================================
 
 # --- Color Definitions ---
@@ -15,6 +15,7 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
+# Script will stop on serious errors, but we handle apt update manually
 set -e
 
 # --- 1. Environment Detection ---
@@ -33,8 +34,8 @@ fi
 # --- 2. Host Setup (LXD) ---
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
 
-# FIX: Added '|| true' so script doesn't stop if Yarn repo fails
-sudo apt-get update || echo -e "${YELLOW}⚠️  Update had warnings, proceeding anyway...${NC}"
+# FIX: || true added to ignore GPG errors from Yarn or other repos
+sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored, proceeding installation...${NC}"
 
 if ! command -v lxd &> /dev/null; then
     echo -e "${BLUE}🛠️  Installing LXD...${NC}"
@@ -95,6 +96,7 @@ sleep 10
 echo -e "\n${CYAN}📦 Installing XFCE Desktop, VNC, and noVNC...${NC}"
 echo -e "${YELLOW}☕  (Grab a coffee, this takes a few minutes...)${NC}"
 
+# Install packages silently
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq > /dev/null
@@ -117,7 +119,7 @@ sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     vncserver :1 -geometry 1280x720 -depth 24 > /dev/null 2>&1
 "
 
-# Start noVNC quietly
+# Start noVNC silently
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "nohup /usr/share/novnc/utils/launch.sh --vnc localhost:5901 --listen 6080 > /dev/null 2>&1 &"
 
 echo -e "${GREEN}✅ GUI Services Started.${NC}"
@@ -125,7 +127,7 @@ echo -e "${GREEN}✅ GUI Services Started.${NC}"
 # --- 6. Pinggy Tunnel Setup ---
 echo -e "\n${CYAN}🌐 Establishing Pinggy Tunnel (Silent Mode)...${NC}"
 
-# Running SSH with LogLevel=ERROR to hide warnings and redirecting ALL output to log file
+# Running SSH completely silently
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "ssh -p 443 -L4300:localhost:4300 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -R0:localhost:6080 ap.free.pinggy.io > /root/pinggy.log 2>&1 &"
 
 sleep 5
@@ -138,7 +140,6 @@ echo -e "${BOLD}${CYAN}============================================${NC}"
 URL=""
 COUNTER=0
 while [ -z "$URL" ] && [ $COUNTER -lt 20 ]; do
-    # Grep carefully to find the URL in the silent log
     URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.free.pinggy.link" /root/pinggy.log | head -n 1)
     if [ -z "$URL" ]; then
          URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.pinggy.io" /root/pinggy.log | head -n 1)
@@ -149,7 +150,7 @@ done
 
 if [ -z "$URL" ]; then
     echo -e "${RED}❌ Could not fetch URL automatically.${NC}"
-    echo -e "${YELLOW}Checking logs internally...${NC}"
+    echo -e "${YELLOW}Here are the logs (if any):${NC}"
     sudo lxc exec "$CONTAINER_NAME" -- cat /root/pinggy.log
 else
     echo -e "${GREEN}${BOLD}🎉 Deployment Successful!${NC}"
