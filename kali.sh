@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-#  Kali Linux LXC + VNC + Pinggy Automation
-#  Fix: SubUID/SubGID Mapping (Nested Fix) 🔧
+#  Kali Linux Auto-Deployer (Final Nuclear Fix) ☢️
+#  Fixes: ID Mapping, Network, Permissions
 # ==========================================
 
 # --- Color Definitions ---
@@ -10,30 +10,18 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
 NC='\033[0m'
 
-# Disable stop-on-error to handle setups manually
-set +e 
+set +e # Don't stop on minor errors
 
-echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (ID Fix) 🐉${NC}   "
-echo -e "${BOLD}${CYAN}============================================${NC}"
+echo -e "${BLUE}============================================${NC}"
+echo -e "   ${GREEN}🐉 Kali Linux Auto-Deployer (Nuclear Mode) 🐉${NC}   "
+echo -e "${BLUE}============================================${NC}"
 
-# --- 1. System Update ---
-echo -e "\n${BLUE}🔄 Updating host system...${NC}"
-sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored...${NC}"
+# --- 1. Fix User ID Mapping (The Main Fix) ---
+echo -e "${YELLOW}🔧 Fixing SubUID/SubGID (Critical Step)...${NC}"
 
-# --- 2. Install LXD ---
-if ! command -v lxd &> /dev/null; then
-    echo -e "${BLUE}🛠️  Installing LXD...${NC}"
-    sudo apt-get install -y lxd lxd-client || sudo snap install lxd
-fi
-
-# --- 3. CRITICAL FIX: Configure SubUID/SubGID ---
-# Ye step "Failed ID" error ko fix karega
-echo -e "${BLUE}🔧 Configuring User ID Mapping (The Fix)...${NC}"
+# Check and add root mapping for IDs
 if ! grep -q "root:1000000:65536" /etc/subuid; then
     echo "root:1000000:65536" | sudo tee -a /etc/subuid
 fi
@@ -41,14 +29,21 @@ if ! grep -q "root:1000000:65536" /etc/subgid; then
     echo "root:1000000:65536" | sudo tee -a /etc/subgid
 fi
 
-# Restart LXD to apply changes
-echo -e "${YELLOW}♻️  Restarting LXD service...${NC}"
-sudo systemctl restart lxd 2>/dev/null || sudo snap restart lxd 2>/dev/null
+# --- 2. Install & Reset LXD ---
+echo -e "${BLUE}🔄 Setting up LXD...${NC}"
+sudo apt-get update -qq || true
 
-# --- 4. Initialize LXD ---
-if ! sudo lxd waitready --timeout 15 2>/dev/null; then
-    echo -e "${YELLOW}⚙️  Initializing LXD...${NC}"
-    cat <<EOF | sudo lxd init --preseed
+if ! command -v lxd &> /dev/null; then
+    sudo apt-get install -y lxd lxd-client || sudo snap install lxd
+fi
+
+# Restart LXD to apply ID changes
+sudo systemctl restart lxd 2>/dev/null || sudo snap restart lxd 2>/dev/null
+sleep 5
+
+# Initialize LXD Forcefully
+sudo lxc waitready --timeout 15 2>/dev/null
+cat <<EOF | sudo lxd init --preseed
 config: {}
 networks:
 - config:
@@ -60,7 +55,7 @@ networks:
   project: default
 storage_pools:
 - config:
-    size: 10GB
+    size: 15GB
   description: ""
   name: default
   driver: dir
@@ -79,55 +74,44 @@ profiles:
   name: default
 cluster: null
 EOF
-fi
 
-# --- 5. Fix Image Remote ---
+# --- 3. Fix Image Server ---
+echo -e "${BLUE}🌍 Syncing Image Server...${NC}"
 sudo lxc remote add images https://images.linuxcontainers.org --protocol=simplestreams --accept-certificate 2>/dev/null || true
 
-# --- 6. Container Launch ---
+# --- 4. Launch Container ---
 CONTAINER_NAME="kali-gui"
 
-if sudo lxc list | grep -q "$CONTAINER_NAME"; then
-    echo -e "${YELLOW}🗑️  Cleaning up old container...${NC}"
-    sudo lxc stop "$CONTAINER_NAME" --force 2>/dev/null
-    sudo lxc delete "$CONTAINER_NAME" 2>/dev/null
-fi
+# Delete old if exists
+sudo lxc stop "$CONTAINER_NAME" --force 2>/dev/null
+sudo lxc delete "$CONTAINER_NAME" 2>/dev/null
 
-echo -e "${BLUE}🚀 Launching Kali Linux container...${NC}"
+echo -e "${BLUE}🚀 Launching Kali Container (Privileged + Nesting)...${NC}"
 
-# Try Privileged first (Most likely to work in Codespaces)
+# Try Rolling Release first
 if sudo lxc launch images:kali/rolling "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-    echo -e "${GREEN}✅ Success! Kali Rolling Launched (Privileged).${NC}"
+    echo -e "${GREEN}✅ Success! Kali Rolling Launched.${NC}"
+# Fallback to Generic
 elif sudo lxc launch images:kali "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-    echo -e "${GREEN}✅ Success! Kali Generic Launched (Privileged).${NC}"
+    echo -e "${GREEN}✅ Success! Kali Generic Launched.${NC}"
 else
-    # Fallback to Unprivileged if Privileged fails
-    echo -e "${YELLOW}⚠️  Privileged mode failed. Trying unprivileged...${NC}"
-    if sudo lxc launch images:kali/rolling "$CONTAINER_NAME"; then
-         echo -e "${GREEN}✅ Success! Kali Rolling Launched (Unprivileged).${NC}"
-    else
-         echo -e "${RED}❌ Error: Launch failed completely.${NC}"
-         echo -e "${YELLOW}Debug suggestion: Try running this in a fresh Codespace.${NC}"
-         exit 1
-    fi
+    echo -e "${RED}❌ Error: Failed to launch container. Check network/storage.${NC}"
+    exit 1
 fi
 
-echo -e "${YELLOW}⏳ Waiting for network...${NC}"
+echo -e "${YELLOW}⏳ Waiting for network (10s)...${NC}"
 sleep 10
 
-# --- 7. Installing GUI & VNC ---
-echo -e "\n${CYAN}📦 Installing XFCE Desktop, VNC, and noVNC...${NC}"
-echo -e "${YELLOW}☕  (This takes time! Don't close terminal...)${NC}"
-
+# --- 5. Install GUI & VNC ---
+echo -e "${BLUE}📦 Installing XFCE & VNC (Takes time!)...${NC}"
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || true
     apt-get install -y kali-linux-default xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh
 " > /dev/null 2>&1
 
-# --- 8. Configuring VNC ---
+# --- 6. Configure VNC ---
 echo -e "${BLUE}🎨 Configuring VNC...${NC}"
-
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     mkdir -p ~/.vnc
     echo 'kali' | vncpasswd -f > ~/.vnc/passwd
@@ -142,39 +126,27 @@ sudo lxc exec "$CONTAINER_NAME" -- bash -c "
 # Start noVNC
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "nohup /usr/share/novnc/utils/launch.sh --vnc localhost:5901 --listen 6080 > /dev/null 2>&1 &"
 
-echo -e "${GREEN}✅ GUI Services Started.${NC}"
-
-# --- 9. Pinggy Tunnel Setup ---
-echo -e "\n${CYAN}🌐 Establishing Pinggy Tunnel...${NC}"
-
+# --- 7. Tunneling ---
+echo -e "${BLUE}🌐 Starting Pinggy Tunnel...${NC}"
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "ssh -p 443 -L4300:localhost:4300 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -R0:localhost:6080 ap.free.pinggy.io > /root/pinggy.log 2>&1 &"
 
-sleep 8
+sleep 10
 
-echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "🔎  Fetching your Access URL..."
-echo -e "${BOLD}${CYAN}============================================${NC}"
-
-URL=""
-COUNTER=0
-while [ -z "$URL" ] && [ $COUNTER -lt 20 ]; do
-    URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.free.pinggy.link" /root/pinggy.log | head -n 1)
-    if [ -z "$URL" ]; then
-         URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.pinggy.io" /root/pinggy.log | head -n 1)
-    fi
-    sleep 2
-    COUNTER=$((COUNTER+1))
-done
+# --- 8. Get URL ---
+echo -e "${BLUE}🔎 Fetching URL...${NC}"
+URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.free.pinggy.link" /root/pinggy.log | head -n 1)
 
 if [ -z "$URL" ]; then
-    echo -e "${RED}❌ Could not fetch URL automatically.${NC}"
-    echo -e "Check logs manually: sudo lxc exec $CONTAINER_NAME -- cat /root/pinggy.log"
-else
-    echo -e "${GREEN}${BOLD}🎉 Deployment Successful!${NC}"
-    echo ""
-    echo -e "${CYAN}🔗 URL:         ${NC} ${BOLD}$URL${NC}"
-    echo -e "${CYAN}🔑 VNC Pass:    ${NC} ${BOLD}kali${NC}"
-    echo ""
-    echo -e "${YELLOW}👉 Click the URL to access Kali Linux GUI.${NC}"
+    URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.pinggy.io" /root/pinggy.log | head -n 1)
 fi
-echo -e "${BOLD}${CYAN}============================================${NC}"
+
+if [ -z "$URL" ]; then
+    echo -e "${RED}❌ URL not found. Check logs manually.${NC}"
+    sudo lxc exec "$CONTAINER_NAME" -- cat /root/pinggy.log
+else
+    echo -e "${GREEN}============================================${NC}"
+    echo -e "🎉  ${BOLD}DEPLOYMENT SUCCESSFUL!${NC}"
+    echo -e "🔗  URL:      ${BOLD}$URL${NC}"
+    echo -e "🔑  Password: ${BOLD}kali${NC}"
+    echo -e "${GREEN}============================================${NC}"
+fi
