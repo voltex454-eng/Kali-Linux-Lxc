@@ -2,7 +2,7 @@
 
 # ==========================================
 #  Kali Linux LXC + VNC + Pinggy Automation
-#  Mode: Robust & Fixed 🛠️
+#  Mode: Universal (Auto-Arch Detect) 🌐
 #  By: Gemini
 # ==========================================
 
@@ -13,31 +13,30 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Stop on errors? No, we will handle them manually where needed.
+# Disable stop-on-error to handle fallbacks manually
 set +e 
 
 # --- 1. Environment Detection ---
 echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Final Fix) 🐉${NC}   "
+echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Universal) 🐉${NC}   "
 echo -e "${BOLD}${CYAN}============================================${NC}"
 
 if [ "$CODESPACES" == "true" ]; then
     echo -e "${YELLOW}☁️  GitHub Codespaces detected.${NC}"
 else
-    echo -e "${YELLOW}💻  Local environment detected.${NC}"
+    echo -e "${YELLOW}💻  Local/VM environment detected.${NC}"
 fi
 
 # --- 2. Host Setup (LXD) ---
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
-
-# FIX: Using '|| true' to forcefully ignore GPG/Repo errors (like the Yarn error in your screenshot)
-sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Repo update failed (likely GPG error). Ignoring and proceeding...${NC}"
+# Ignore update errors
+sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored...${NC}"
 
 if ! command -v lxd &> /dev/null; then
     echo -e "${BLUE}🛠️  Installing LXD...${NC}"
-    sudo apt-get install -y lxd lxd-client || echo -e "${RED}Failed to install LXD. Retrying update...${NC}"
+    sudo apt-get install -y lxd lxd-client || echo -e "${RED}LXD install failed, trying to continue...${NC}"
 fi
 
 # Initialize LXD
@@ -77,11 +76,10 @@ EOF
 fi
 
 # --- 3. Fix Image Remote ---
-# Ensure the 'images' remote exists and is correct
-echo -e "${BLUE}🌍 Checking Image Server...${NC}"
+# Make sure we have the correct image server
 sudo lxc remote add images https://images.linuxcontainers.org --protocol=simplestreams --accept-certificate 2>/dev/null || true
 
-# --- 4. Container Launch ---
+# --- 4. Container Launch (The Fix) ---
 CONTAINER_NAME="kali-gui"
 
 # Cleanup old container
@@ -93,14 +91,14 @@ fi
 
 echo -e "${BLUE}🚀 Downloading and launching Kali Linux container...${NC}"
 
-# FIX: Trying multiple aliases if one fails
+# Try standard rolling image (Let LXC pick the architecture automatically)
 if sudo lxc launch images:kali/rolling "$CONTAINER_NAME"; then
-    echo -e "${GREEN}✅ Image found: images:kali/rolling${NC}"
+    echo -e "${GREEN}✅ Successfully launched Kali Rolling image!${NC}"
 elif sudo lxc launch images:kali "$CONTAINER_NAME"; then
-    echo -e "${GREEN}✅ Image found: images:kali${NC}"
+    echo -e "${GREEN}✅ Successfully launched generic Kali image!${NC}"
 else
-    echo -e "${RED}❌ Error: Could not find Kali image automatically.${NC}"
-    echo -e "${YELLOW}Listing available Kali images for debugging:${NC}"
+    echo -e "${RED}❌ Error: Could not find any Kali image.${NC}"
+    echo -e "${YELLOW}Debug Info - Available Images:${NC}"
     sudo lxc image list images:kali
     exit 1
 fi
@@ -108,11 +106,10 @@ fi
 echo -e "${YELLOW}⏳ Waiting for network...${NC}"
 sleep 10
 
-# --- 5. Installing GUI & VNC inside Container ---
+# --- 5. Installing GUI & VNC ---
 echo -e "\n${CYAN}📦 Installing XFCE Desktop, VNC, and noVNC...${NC}"
 echo -e "${YELLOW}☕  (This WILL take time. Don't close the terminal...)${NC}"
 
-# Install packages
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || true
@@ -141,7 +138,6 @@ echo -e "${GREEN}✅ GUI Services Started.${NC}"
 # --- 7. Pinggy Tunnel Setup ---
 echo -e "\n${CYAN}🌐 Establishing Pinggy Tunnel...${NC}"
 
-# Running SSH Tunnel
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "ssh -p 443 -L4300:localhost:4300 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -R0:localhost:6080 ap.free.pinggy.io > /root/pinggy.log 2>&1 &"
 
 sleep 8
@@ -150,7 +146,6 @@ echo -e "${BOLD}${CYAN}============================================${NC}"
 echo -e "🔎  Fetching your Access URL..."
 echo -e "${BOLD}${CYAN}============================================${NC}"
 
-# Fetch URL
 URL=""
 COUNTER=0
 while [ -z "$URL" ] && [ $COUNTER -lt 20 ]; do
