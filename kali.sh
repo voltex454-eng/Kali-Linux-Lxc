@@ -19,20 +19,14 @@ set +e
 
 # --- 1. Environment Detection ---
 echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Privileged) 🐉${NC}   "
+echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Root Mode) 🐉${NC}   "
 echo -e "${BOLD}${CYAN}============================================${NC}"
-
-if [ "$CODESPACES" == "true" ]; then
-    echo -e "${YELLOW}☁️  GitHub Codespaces detected.${NC}"
-else
-    echo -e "${YELLOW}💻  Local/VM environment detected.${NC}"
-fi
 
 # --- 2. Host Setup (LXD) ---
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
 sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored...${NC}"
 
-# Install LXD
+# Install LXD if missing
 if ! command -v lxd &> /dev/null; then
     echo -e "${BLUE}🛠️  Installing LXD...${NC}"
     sudo apt-get install -y lxd lxd-client || sudo snap install lxd
@@ -90,18 +84,14 @@ fi
 echo -e "${BLUE}🚀 Launching Kali Linux container (Privileged Mode)...${NC}"
 
 # FIX: Added '-c security.privileged=true -c security.nesting=true'
-# This bypasses the ID mapping error seen in your screenshot.
-if sudo lxc launch images:kali "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-    echo -e "${GREEN}✅ Success! Kali Container Launched.${NC}"
+# Ye flag 'Failed ID' error ko bypass kar dega
+if sudo lxc launch images:kali/rolling "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
+    echo -e "${GREEN}✅ Success! Kali Rolling Launched.${NC}"
+elif sudo lxc launch images:kali "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
+    echo -e "${GREEN}✅ Success! Kali Generic Launched.${NC}"
 else
-    # Fallback to rolling if simple alias fails
-    echo -e "${YELLOW}⚠️  Retrying with 'rolling' tag...${NC}"
-    if sudo lxc launch images:kali/rolling "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-         echo -e "${GREEN}✅ Success! Kali Rolling Launched.${NC}"
-    else
-         echo -e "${RED}❌ Error: Launch failed. Check logs.${NC}"
-         exit 1
-    fi
+    echo -e "${RED}❌ Error: Launch failed. Check permissions.${NC}"
+    exit 1
 fi
 
 echo -e "${YELLOW}⏳ Waiting for network...${NC}"
