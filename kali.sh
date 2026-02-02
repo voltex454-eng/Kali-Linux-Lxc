@@ -2,7 +2,7 @@
 
 # ==========================================
 #  Kali Linux LXC + VNC + Pinggy Automation
-#  Mode: Privileged (Fixes 'Failed ID' Error) 🛡️
+#  Fix: SubUID/SubGID Mapping (Nested Fix) 🔧
 # ==========================================
 
 # --- Color Definitions ---
@@ -14,25 +14,38 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Disable stop-on-error to allow fallbacks
+# Disable stop-on-error to handle setups manually
 set +e 
 
-# --- 1. Environment Detection ---
 echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Root Mode) 🐉${NC}   "
+echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (ID Fix) 🐉${NC}   "
 echo -e "${BOLD}${CYAN}============================================${NC}"
 
-# --- 2. Host Setup (LXD) ---
+# --- 1. System Update ---
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
 sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored...${NC}"
 
-# Install LXD if missing
+# --- 2. Install LXD ---
 if ! command -v lxd &> /dev/null; then
     echo -e "${BLUE}🛠️  Installing LXD...${NC}"
     sudo apt-get install -y lxd lxd-client || sudo snap install lxd
 fi
 
-# Initialize LXD (if not ready)
+# --- 3. CRITICAL FIX: Configure SubUID/SubGID ---
+# Ye step "Failed ID" error ko fix karega
+echo -e "${BLUE}🔧 Configuring User ID Mapping (The Fix)...${NC}"
+if ! grep -q "root:1000000:65536" /etc/subuid; then
+    echo "root:1000000:65536" | sudo tee -a /etc/subuid
+fi
+if ! grep -q "root:1000000:65536" /etc/subgid; then
+    echo "root:1000000:65536" | sudo tee -a /etc/subgid
+fi
+
+# Restart LXD to apply changes
+echo -e "${YELLOW}♻️  Restarting LXD service...${NC}"
+sudo systemctl restart lxd 2>/dev/null || sudo snap restart lxd 2>/dev/null
+
+# --- 4. Initialize LXD ---
 if ! sudo lxd waitready --timeout 15 2>/dev/null; then
     echo -e "${YELLOW}⚙️  Initializing LXD...${NC}"
     cat <<EOF | sudo lxd init --preseed
@@ -68,36 +81,41 @@ cluster: null
 EOF
 fi
 
-# --- 3. Fix Image Remote ---
+# --- 5. Fix Image Remote ---
 sudo lxc remote add images https://images.linuxcontainers.org --protocol=simplestreams --accept-certificate 2>/dev/null || true
 
-# --- 4. Container Launch (Privileged Fix) ---
+# --- 6. Container Launch ---
 CONTAINER_NAME="kali-gui"
 
-# Cleanup old container
 if sudo lxc list | grep -q "$CONTAINER_NAME"; then
     echo -e "${YELLOW}🗑️  Cleaning up old container...${NC}"
     sudo lxc stop "$CONTAINER_NAME" --force 2>/dev/null
     sudo lxc delete "$CONTAINER_NAME" 2>/dev/null
 fi
 
-echo -e "${BLUE}🚀 Launching Kali Linux container (Privileged Mode)...${NC}"
+echo -e "${BLUE}🚀 Launching Kali Linux container...${NC}"
 
-# FIX: Added '-c security.privileged=true -c security.nesting=true'
-# Ye flag 'Failed ID' error ko bypass kar dega
+# Try Privileged first (Most likely to work in Codespaces)
 if sudo lxc launch images:kali/rolling "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-    echo -e "${GREEN}✅ Success! Kali Rolling Launched.${NC}"
+    echo -e "${GREEN}✅ Success! Kali Rolling Launched (Privileged).${NC}"
 elif sudo lxc launch images:kali "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-    echo -e "${GREEN}✅ Success! Kali Generic Launched.${NC}"
+    echo -e "${GREEN}✅ Success! Kali Generic Launched (Privileged).${NC}"
 else
-    echo -e "${RED}❌ Error: Launch failed. Check permissions.${NC}"
-    exit 1
+    # Fallback to Unprivileged if Privileged fails
+    echo -e "${YELLOW}⚠️  Privileged mode failed. Trying unprivileged...${NC}"
+    if sudo lxc launch images:kali/rolling "$CONTAINER_NAME"; then
+         echo -e "${GREEN}✅ Success! Kali Rolling Launched (Unprivileged).${NC}"
+    else
+         echo -e "${RED}❌ Error: Launch failed completely.${NC}"
+         echo -e "${YELLOW}Debug suggestion: Try running this in a fresh Codespace.${NC}"
+         exit 1
+    fi
 fi
 
 echo -e "${YELLOW}⏳ Waiting for network...${NC}"
 sleep 10
 
-# --- 5. Installing GUI & VNC ---
+# --- 7. Installing GUI & VNC ---
 echo -e "\n${CYAN}📦 Installing XFCE Desktop, VNC, and noVNC...${NC}"
 echo -e "${YELLOW}☕  (This takes time! Don't close terminal...)${NC}"
 
@@ -107,7 +125,7 @@ sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     apt-get install -y kali-linux-default xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh
 " > /dev/null 2>&1
 
-# --- 6. Configuring VNC ---
+# --- 8. Configuring VNC ---
 echo -e "${BLUE}🎨 Configuring VNC...${NC}"
 
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
@@ -126,7 +144,7 @@ sudo lxc exec "$CONTAINER_NAME" -- bash -c "nohup /usr/share/novnc/utils/launch.
 
 echo -e "${GREEN}✅ GUI Services Started.${NC}"
 
-# --- 7. Pinggy Tunnel Setup ---
+# --- 9. Pinggy Tunnel Setup ---
 echo -e "\n${CYAN}🌐 Establishing Pinggy Tunnel...${NC}"
 
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "ssh -p 443 -L4300:localhost:4300 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -R0:localhost:6080 ap.free.pinggy.io > /root/pinggy.log 2>&1 &"
