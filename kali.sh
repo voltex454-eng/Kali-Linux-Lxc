@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-#  Kali Linux Auto-Deployer (Storage Fix) 💾
-#  Fixes: Invalid Option "size"
+#  Kali Linux Auto-Deployer (Visible Mode) 👁️
+#  Feature: Shows Live Installation Progress
 # ==========================================
 
 # --- Color Definitions ---
@@ -15,11 +15,11 @@ NC='\033[0m'
 set +e
 
 echo -e "${BLUE}============================================${NC}"
-echo -e "   ${GREEN}🐉 Kali Linux Auto-Deployer (Final V2) 🐉${NC}   "
+echo -e "   ${GREEN}🐉 Kali Linux Deployer (Visible Progress) 🐉${NC}   "
 echo -e "${BLUE}============================================${NC}"
 
 # --- 1. Fix User ID Mapping ---
-echo -e "${YELLOW}🔧 Fixing SubUID/SubGID...${NC}"
+echo -e "${YELLOW}🔧 Checking ID Mapping...${NC}"
 if ! grep -q "root:1000000:65536" /etc/subuid; then
     echo "root:1000000:65536" | sudo tee -a /etc/subuid
 fi
@@ -28,18 +28,17 @@ if ! grep -q "root:1000000:65536" /etc/subgid; then
 fi
 
 # --- 2. Install & Reset LXD ---
-echo -e "${BLUE}🔄 Setting up LXD...${NC}"
+echo -e "${BLUE}🔄 Preparing LXD...${NC}"
 sudo apt-get update -qq || true
 
 if ! command -v lxd &> /dev/null; then
     sudo apt-get install -y lxd lxd-client || sudo snap install lxd
 fi
 
-# Restart LXD
 sudo systemctl restart lxd 2>/dev/null || sudo snap restart lxd 2>/dev/null
-sleep 5
+sleep 3
 
-# Initialize LXD (FIXED: Removed 'size' option)
+# Initialize LXD (Storage Fix Included)
 sudo lxc waitready --timeout 15 2>/dev/null
 cat <<EOF | sudo lxd init --preseed
 config: {}
@@ -52,7 +51,7 @@ networks:
   type: ""
   project: default
 storage_pools:
-- config: {} 
+- config: {}
   description: ""
   name: default
   driver: dir
@@ -83,29 +82,37 @@ CONTAINER_NAME="kali-gui"
 sudo lxc stop "$CONTAINER_NAME" --force 2>/dev/null
 sudo lxc delete "$CONTAINER_NAME" 2>/dev/null
 
-echo -e "${BLUE}🚀 Launching Kali Container (Privileged)...${NC}"
+echo -e "${BLUE}🚀 Launching Kali Container...${NC}"
 
-# Try Rolling Release
+# Launch
 if sudo lxc launch images:kali/rolling "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-    echo -e "${GREEN}✅ Success! Kali Rolling Launched.${NC}"
-# Fallback
+    echo -e "${GREEN}✅ Kali Rolling Launched.${NC}"
 elif sudo lxc launch images:kali "$CONTAINER_NAME" -c security.privileged=true -c security.nesting=true; then
-    echo -e "${GREEN}✅ Success! Kali Generic Launched.${NC}"
+    echo -e "${GREEN}✅ Kali Generic Launched.${NC}"
 else
-    echo -e "${RED}❌ Error: Launch failed. Check logs.${NC}"
+    echo -e "${RED}❌ Launch failed.${NC}"
     exit 1
 fi
 
 echo -e "${YELLOW}⏳ Waiting for network (10s)...${NC}"
 sleep 10
 
-# --- 5. Install GUI & VNC ---
-echo -e "${BLUE}📦 Installing XFCE & VNC...${NC}"
+# --- 5. Install GUI (WITH OUTPUT) ---
+echo -e "${BLUE}============================================${NC}"
+echo -e "${YELLOW}📦 STARTING DOWNLOAD & INSTALLATION${NC}"
+echo -e "${YELLOW}   (Screen will scroll fast, don't panic!)${NC}"
+echo -e "${BLUE}============================================${NC}"
+
+# NOTE: Removed '> /dev/null' so you can see the progress
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq || true
+    echo 'Update started...'
+    apt-get update -y
+    echo 'Installing XFCE, VNC and Tools...'
     apt-get install -y kali-linux-default xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh
-" > /dev/null 2>&1
+"
+
+echo -e "${GREEN}✅ Installation Completed!${NC}"
 
 # --- 6. Configure VNC ---
 echo -e "${BLUE}🎨 Configuring VNC...${NC}"
