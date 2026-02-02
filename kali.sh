@@ -1,9 +1,10 @@
+
 #!/bin/bash
 
 # ==========================================
 #  Kali Linux LXC + VNC + Pinggy Automation
-#  Mode: Universal (Auto-Arch Detect) 🌐
-#  By: Gemini
+#  Based on Official Docs
+#  Mode: Universal (Auto-Arch & Fallback)
 # ==========================================
 
 # --- Color Definitions ---
@@ -15,12 +16,12 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Disable stop-on-error to handle fallbacks manually
+# Disable stop-on-error to allow fallbacks
 set +e 
 
 # --- 1. Environment Detection ---
 echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Universal) 🐉${NC}   "
+echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Doc Fix) 🐉${NC}   "
 echo -e "${BOLD}${CYAN}============================================${NC}"
 
 if [ "$CODESPACES" == "true" ]; then
@@ -31,12 +32,18 @@ fi
 
 # --- 2. Host Setup (LXD) ---
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
-# Ignore update errors
 sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored...${NC}"
 
+# Try installing LXD via APT first (Faster in containers)
 if ! command -v lxd &> /dev/null; then
-    echo -e "${BLUE}🛠️  Installing LXD...${NC}"
-    sudo apt-get install -y lxd lxd-client || echo -e "${RED}LXD install failed, trying to continue...${NC}"
+    echo -e "${BLUE}🛠️  Installing LXD (Method 1: APT)...${NC}"
+    sudo apt-get install -y lxd lxd-client || echo -e "${YELLOW}APT install failed. Trying Snap...${NC}"
+fi
+
+# Fallback to SNAP (As per Official Docs)
+if ! command -v lxd &> /dev/null; then
+    echo -e "${BLUE}🛠️  Installing LXD (Method 2: SNAP)...${NC}"
+    sudo snap install lxd || echo -e "${RED}LXD install failed. Please install LXD manually.${NC}"
 fi
 
 # Initialize LXD
@@ -76,7 +83,8 @@ EOF
 fi
 
 # --- 3. Fix Image Remote ---
-# Make sure we have the correct image server
+# Explicitly add the images server as per docs
+echo -e "${BLUE}🌍 syncing Image Server...${NC}"
 sudo lxc remote add images https://images.linuxcontainers.org --protocol=simplestreams --accept-certificate 2>/dev/null || true
 
 # --- 4. Container Launch (The Fix) ---
@@ -91,11 +99,19 @@ fi
 
 echo -e "${BLUE}🚀 Downloading and launching Kali Linux container...${NC}"
 
-# Try standard rolling image (Let LXC pick the architecture automatically)
+# Try multiple image names to bypass "Not Found" error
+# Attempt 1: Rolling (Best for updates)
 if sudo lxc launch images:kali/rolling "$CONTAINER_NAME"; then
-    echo -e "${GREEN}✅ Successfully launched Kali Rolling image!${NC}"
+    echo -e "${GREEN}✅ Success! Image used: images:kali/rolling${NC}"
+
+# Attempt 2: Current (As per Docs)
+elif sudo lxc launch images:kali/current "$CONTAINER_NAME"; then
+    echo -e "${GREEN}✅ Success! Image used: images:kali/current${NC}"
+
+# Attempt 3: Generic
 elif sudo lxc launch images:kali "$CONTAINER_NAME"; then
-    echo -e "${GREEN}✅ Successfully launched generic Kali image!${NC}"
+    echo -e "${GREEN}✅ Success! Image used: images:kali (Generic)${NC}"
+
 else
     echo -e "${RED}❌ Error: Could not find any Kali image.${NC}"
     echo -e "${YELLOW}Debug Info - Available Images:${NC}"
@@ -113,7 +129,8 @@ echo -e "${YELLOW}☕  (This WILL take time. Don't close the terminal...)${NC}"
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq || true
-    apt-get install -y xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh
+    # Installing kali-defaults as referenced in docs, plus VNC
+    apt-get install -y kali-linux-default xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh
 " > /dev/null 2>&1
 
 # --- 6. Configuring VNC ---
