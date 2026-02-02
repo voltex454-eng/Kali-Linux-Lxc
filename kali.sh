@@ -1,118 +1,161 @@
 #!/bin/bash
-# Kali Linux: Docker Mode (Optimized for GitHub Codespaces)
-# Features: XFCE Desktop + VNC + Pinggy Tunnel
 
-# --- COLORS ---
-ORANGE='\033[1;33m'
-GRAY='\033[1;90m'
-GREEN='\033[1;32m'
-NC='\033[0m'
+# ==========================================
+#  Kali Linux LXC + VNC + Pinggy Automation
+#  Mode: Silent & Stealthy 🥷
+#  By: Gemini
+# ==========================================
 
-CONTAINER_NAME="kali-gui-container"
+# --- Color Definitions ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
 
-clear
-echo -e "${GRAY}------------------------------------------------${NC}"
-echo -e "${ORANGE}   Kali Linux: Docker Mode (Codespaces)   ${NC}"
-echo -e "${GRAY}------------------------------------------------${NC}"
+set -e
 
-# 1. Check for Docker
-echo -e "${ORANGE}[1/7]${GRAY} Checking Docker Environment...${NC}"
-if ! command -v docker &> /dev/null; then
-    echo -e "${ORANGE}Error:${NC} Docker not found! Codespaces usually has Docker."
-    echo "Please ensure you are in a standard Codespace environment."
-    exit 1
-fi
+# --- 1. Environment Detection ---
+echo -e "${BOLD}${CYAN}============================================${NC}"
+echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer Script 🐉${NC}   "
+echo -e "${BOLD}${CYAN}============================================${NC}"
 
-# 2. Setup VNC Web Client (noVNC)
-if [ ! -d "novnc" ]; then
-    echo -e "${ORANGE}[2/7]${GRAY} Configuring VNC Viewer...${NC}"
-    git clone --depth 1 https://github.com/novnc/noVNC.git novnc > /dev/null 2>&1
-    git clone --depth 1 https://github.com/novnc/websockify novnc/utils/websockify > /dev/null 2>&1
-fi
-
-# 3. Run Kali Docker Container
-if [ "$(docker ps -q -f name=$CONTAINER_NAME)" ]; then
-    echo -e "${ORANGE}[3/7]${GRAY} Container is already running.${NC}"
+IS_CODESPACE=false
+if [ "$CODESPACES" == "true" ]; then
+    IS_CODESPACE=true
+    echo -e "${YELLOW}☁️  GitHub Codespaces detected.${NC}"
 else
-    echo -e "${ORANGE}[3/7]${GRAY} Pulling & Starting Kali Container...${NC}"
-    # Remove old container if it exists but stopped
-    docker rm -f $CONTAINER_NAME > /dev/null 2>&1
-    
-    # Run Docker with Port 5901 exposed for VNC
-    docker run -d \
-        --name "$CONTAINER_NAME" \
-        -p 5901:5901 \
-        kalilinux/kali-rolling tail -f /dev/null > /dev/null
+    echo -e "${YELLOW}💻  Local environment detected.${NC}"
 fi
 
-# 4. Install GUI & VNC inside Docker
-echo -e "${ORANGE}[4/7]${GRAY} Installing Desktop (This takes 5-8 mins)...${NC}"
+# --- 2. Host Setup (LXD) ---
+echo -e "\n${BLUE}🔄 Updating host system...${NC}"
+sudo apt-get update -qq
 
-# Create setup script for inside the container
-cat << 'EOF' > setup_docker.sh
-#!/bin/bash
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-# Install XFCE, VNC Server, and essential tools
-apt-get install -y xfce4 xfce4-goodies tigervnc-standalone-server dbus-x11 net-tools wget
-apt-get clean
+if ! command -v lxd &> /dev/null; then
+    echo -e "${BLUE}🛠️  Installing LXD...${NC}"
+    sudo apt-get install -y lxd lxd-client
+fi
 
-# Setup VNC Password (default: kali)
-mkdir -p /root/.vnc
-echo "kali" | vncpasswd -f > /root/.vnc/passwd
-chmod 600 /root/.vnc/passwd
-
-# Create Startup Script
-echo '#!/bin/bash
-rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1
-export USER=root
-vncserver :1 -geometry 1280x720 -depth 24 -localhost no
-' > /usr/local/bin/start-vnc
-chmod +x /usr/local/bin/start-vnc
+if ! sudo lxd waitready --timeout 15 2>/dev/null; then
+    echo -e "${YELLOW}⚙️  Initializing LXD (Auto Mode)...${NC}"
+    cat <<EOF | sudo lxd init --preseed
+config: {}
+networks:
+- config:
+    ipv4.address: auto
+    ipv6.address: auto
+  description: ""
+  name: lxdbr0
+  type: ""
+  project: default
+storage_pools:
+- config:
+    size: 10GB
+  description: ""
+  name: default
+  driver: dir
+profiles:
+- config: {}
+  description: ""
+  devices:
+    eth0:
+      name: eth0
+      network: lxdbr0
+      type: nic
+    root:
+      path: /
+      pool: default
+      type: disk
+  name: default
+cluster: null
 EOF
+fi
 
-# Copy script into container and execute
-docker cp setup_docker.sh "$CONTAINER_NAME":/root/
-docker exec "$CONTAINER_NAME" bash /root/setup_docker.sh > /dev/null 2>&1
+# --- 3. Container Launch ---
+CONTAINER_NAME="kali-gui"
 
-# 5. Start VNC Server
-echo -e "${ORANGE}[5/7]${GRAY} Starting VNC Server...${NC}"
-docker exec "$CONTAINER_NAME" /usr/local/bin/start-vnc > /dev/null 2>&1
+if sudo lxc list | grep -q "$CONTAINER_NAME"; then
+    echo -e "${YELLOW}🗑️  Cleaning up old container...${NC}"
+    sudo lxc stop "$CONTAINER_NAME" --force
+    sudo lxc delete "$CONTAINER_NAME"
+fi
 
-# 6. Start noVNC Proxy
-echo -e "${ORANGE}[6/7]${GRAY} Starting Display Bridge...${NC}"
-# Connects Localhost:6080 -> Docker:5901
-./novnc/utils/novnc_proxy --vnc localhost:5901 --listen 6080 > /dev/null 2>&1 &
+echo -e "${BLUE}🚀 Downloading and launching Kali Linux container...${NC}"
+sudo lxc launch images:kali/current/amd64 "$CONTAINER_NAME"
 
-# 7. Public URL (Pinggy)
-echo -e "${ORANGE}[7/7]${GRAY} Generating Public Link...${NC}"
+echo -e "${YELLOW}⏳ Waiting for network...${NC}"
+sleep 10
 
-rm -f tunnel.log
-# Tunnel port 6080 (noVNC)
-nohup ssh -q -p 443 -R0:localhost:6080 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 free.pinggy.io > tunnel.log 2>&1 &
+# --- 4. Installing GUI & VNC inside Container ---
+echo -e "\n${CYAN}📦 Installing XFCE Desktop, VNC, and noVNC...${NC}"
+echo -e "${YELLOW}☕  (Grab a coffee, this takes a few minutes...)${NC}"
 
-SSH_PID=$!
-while ! grep -q "https://" tunnel.log; do
-    sleep 1
+sudo lxc exec "$CONTAINER_NAME" -- bash -c "
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq > /dev/null
+    apt-get install -y xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh > /dev/null 2>&1
+"
+
+# --- 5. Configuring VNC ---
+echo -e "${BLUE}🎨 Configuring VNC and noVNC...${NC}"
+
+sudo lxc exec "$CONTAINER_NAME" -- bash -c "
+    mkdir -p ~/.vnc
+    echo 'kali' | vncpasswd -f > ~/.vnc/passwd
+    chmod 600 ~/.vnc/passwd
+
+    echo '#!/bin/bash
+    xrdb \$HOME/.Xresources
+    startxfce4 &' > ~/.vnc/xstartup
+    chmod +x ~/.vnc/xstartup
+
+    vncserver :1 -geometry 1280x720 -depth 24 > /dev/null 2>&1
+"
+
+# Start noVNC quietly
+sudo lxc exec "$CONTAINER_NAME" -- bash -c "nohup /usr/share/novnc/utils/launch.sh --vnc localhost:5901 --listen 6080 > /dev/null 2>&1 &"
+
+echo -e "${GREEN}✅ GUI Services Started.${NC}"
+
+# --- 6. Pinggy Tunnel Setup ---
+echo -e "\n${CYAN}🌐 Establishing Pinggy Tunnel (Silent Mode)...${NC}"
+
+# Running SSH with LogLevel=ERROR to hide warnings and redirecting ALL output to log file
+sudo lxc exec "$CONTAINER_NAME" -- bash -c "ssh -p 443 -L4300:localhost:4300 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -R0:localhost:6080 ap.free.pinggy.io > /root/pinggy.log 2>&1 &"
+
+sleep 5
+
+echo -e "${BOLD}${CYAN}============================================${NC}"
+echo -e "🔎  Fetching your Access URL..."
+echo -e "${BOLD}${CYAN}============================================${NC}"
+
+# Loop to grab URL
+URL=""
+COUNTER=0
+while [ -z "$URL" ] && [ $COUNTER -lt 20 ]; do
+    # Grep carefully to find the URL in the silent log
+    URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.free.pinggy.link" /root/pinggy.log | head -n 1)
+    if [ -z "$URL" ]; then
+         URL=$(sudo lxc exec "$CONTAINER_NAME" -- grep -o "https://.*.pinggy.io" /root/pinggy.log | head -n 1)
+    fi
+    sleep 2
+    COUNTER=$((COUNTER+1))
 done
 
-PUBLIC_URL=$(grep -o "https://[^ ]*.pinggy.link" tunnel.log | head -n 1)
+if [ -z "$URL" ]; then
+    echo -e "${RED}❌ Could not fetch URL automatically.${NC}"
+    echo -e "${YELLOW}Checking logs internally...${NC}"
+    sudo lxc exec "$CONTAINER_NAME" -- cat /root/pinggy.log
+else
+    echo -e "${GREEN}${BOLD}🎉 Deployment Successful!${NC}"
+    echo ""
+    echo -e "${CYAN}🔗 URL:         ${NC} ${BOLD}$URL${NC}"
+    echo -e "${CYAN}🔑 VNC Pass:    ${NC} ${BOLD}kali${NC}"
+    echo ""
+    echo -e "${YELLOW}👉 Click the URL to access Kali Linux GUI.${NC}"
+fi
 
-# --- FINAL CLEAN SCREEN ---
-clear
-echo -e "${GRAY}========================================================${NC}"
-echo -e "${ORANGE}      ✅  KALI DOCKER STARTED! ${NC}"
-echo -e "${GRAY}========================================================${NC}"
-echo ""
-echo -e "${GRAY} 🔗 ACCESS URL:  ${ORANGE}$PUBLIC_URL${NC}"
-echo -e "${GRAY} 🔑 VNC Password: ${ORANGE}kali${NC}"
-echo ""
-echo -e "${GRAY}========================================================${NC}"
-echo -e "${GRAY} ⏳ Wait 1 min if screen is black (Desktop loading)${NC}"
-echo -e "${GRAY} 🛑 Stop: docker stop $CONTAINER_NAME${NC}"
-echo -e "${GRAY}========================================================${NC}"
-
-# Silent Loop
-while kill -0 $SSH_PID 2>/dev/null; do
-    sleep 5
-done
+echo -e "${BOLD}${CYAN}============================================${NC}"
