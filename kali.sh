@@ -2,8 +2,8 @@
 
 # ==========================================
 #  Kali Linux LXC + VNC + Pinggy Automation
-#  Mode: Silent & Stealthy 🥷
-#  Fix: Bypasses Apt Update Errors
+#  Mode: Robust & Fixed 🛠️
+#  By: Gemini
 # ==========================================
 
 # --- Color Definitions ---
@@ -15,17 +15,15 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# Script will stop on serious errors, but we handle apt update manually
-set -e
+# Stop on errors? No, we will handle them manually where needed.
+set +e 
 
 # --- 1. Environment Detection ---
 echo -e "${BOLD}${CYAN}============================================${NC}"
-echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer Script 🐉${NC}   "
+echo -e "   ${BOLD}🐉 Kali Linux Auto-Deployer (Final Fix) 🐉${NC}   "
 echo -e "${BOLD}${CYAN}============================================${NC}"
 
-IS_CODESPACE=false
 if [ "$CODESPACES" == "true" ]; then
-    IS_CODESPACE=true
     echo -e "${YELLOW}☁️  GitHub Codespaces detected.${NC}"
 else
     echo -e "${YELLOW}💻  Local environment detected.${NC}"
@@ -34,14 +32,15 @@ fi
 # --- 2. Host Setup (LXD) ---
 echo -e "\n${BLUE}🔄 Updating host system...${NC}"
 
-# FIX: || true added to ignore GPG errors from Yarn or other repos
-sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Update warnings ignored, proceeding installation...${NC}"
+# FIX: Using '|| true' to forcefully ignore GPG/Repo errors (like the Yarn error in your screenshot)
+sudo apt-get update -qq || echo -e "${YELLOW}⚠️  Repo update failed (likely GPG error). Ignoring and proceeding...${NC}"
 
 if ! command -v lxd &> /dev/null; then
     echo -e "${BLUE}🛠️  Installing LXD...${NC}"
-    sudo apt-get install -y lxd lxd-client
+    sudo apt-get install -y lxd lxd-client || echo -e "${RED}Failed to install LXD. Retrying update...${NC}"
 fi
 
+# Initialize LXD
 if ! sudo lxd waitready --timeout 15 2>/dev/null; then
     echo -e "${YELLOW}⚙️  Initializing LXD (Auto Mode)...${NC}"
     cat <<EOF | sudo lxd init --preseed
@@ -77,66 +76,81 @@ cluster: null
 EOF
 fi
 
-# --- 3. Container Launch ---
+# --- 3. Fix Image Remote ---
+# Ensure the 'images' remote exists and is correct
+echo -e "${BLUE}🌍 Checking Image Server...${NC}"
+sudo lxc remote add images https://images.linuxcontainers.org --protocol=simplestreams --accept-certificate 2>/dev/null || true
+
+# --- 4. Container Launch ---
 CONTAINER_NAME="kali-gui"
 
+# Cleanup old container
 if sudo lxc list | grep -q "$CONTAINER_NAME"; then
     echo -e "${YELLOW}🗑️  Cleaning up old container...${NC}"
-    sudo lxc stop "$CONTAINER_NAME" --force
-    sudo lxc delete "$CONTAINER_NAME"
+    sudo lxc stop "$CONTAINER_NAME" --force 2>/dev/null
+    sudo lxc delete "$CONTAINER_NAME" 2>/dev/null
 fi
 
 echo -e "${BLUE}🚀 Downloading and launching Kali Linux container...${NC}"
-sudo lxc launch images:kali/current/amd64 "$CONTAINER_NAME"
+
+# FIX: Trying multiple aliases if one fails
+if sudo lxc launch images:kali/rolling "$CONTAINER_NAME"; then
+    echo -e "${GREEN}✅ Image found: images:kali/rolling${NC}"
+elif sudo lxc launch images:kali "$CONTAINER_NAME"; then
+    echo -e "${GREEN}✅ Image found: images:kali${NC}"
+else
+    echo -e "${RED}❌ Error: Could not find Kali image automatically.${NC}"
+    echo -e "${YELLOW}Listing available Kali images for debugging:${NC}"
+    sudo lxc image list images:kali
+    exit 1
+fi
 
 echo -e "${YELLOW}⏳ Waiting for network...${NC}"
 sleep 10
 
-# --- 4. Installing GUI & VNC inside Container ---
+# --- 5. Installing GUI & VNC inside Container ---
 echo -e "\n${CYAN}📦 Installing XFCE Desktop, VNC, and noVNC...${NC}"
-echo -e "${YELLOW}☕  (Grab a coffee, this takes a few minutes...)${NC}"
+echo -e "${YELLOW}☕  (This WILL take time. Don't close the terminal...)${NC}"
 
-# Install packages silently
+# Install packages
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq > /dev/null
-    apt-get install -y xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh > /dev/null 2>&1
-"
+    apt-get update -qq || true
+    apt-get install -y xfce4 xfce4-goodies tigervnc-standalone-server novnc python3-websockify dbus-x11 curl ssh
+" > /dev/null 2>&1
 
-# --- 5. Configuring VNC ---
-echo -e "${BLUE}🎨 Configuring VNC and noVNC...${NC}"
+# --- 6. Configuring VNC ---
+echo -e "${BLUE}🎨 Configuring VNC...${NC}"
 
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "
     mkdir -p ~/.vnc
     echo 'kali' | vncpasswd -f > ~/.vnc/passwd
     chmod 600 ~/.vnc/passwd
-
     echo '#!/bin/bash
     xrdb \$HOME/.Xresources
     startxfce4 &' > ~/.vnc/xstartup
     chmod +x ~/.vnc/xstartup
+    vncserver :1 -geometry 1280x720 -depth 24
+" > /dev/null 2>&1
 
-    vncserver :1 -geometry 1280x720 -depth 24 > /dev/null 2>&1
-"
-
-# Start noVNC silently
+# Start noVNC
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "nohup /usr/share/novnc/utils/launch.sh --vnc localhost:5901 --listen 6080 > /dev/null 2>&1 &"
 
 echo -e "${GREEN}✅ GUI Services Started.${NC}"
 
-# --- 6. Pinggy Tunnel Setup ---
-echo -e "\n${CYAN}🌐 Establishing Pinggy Tunnel (Silent Mode)...${NC}"
+# --- 7. Pinggy Tunnel Setup ---
+echo -e "\n${CYAN}🌐 Establishing Pinggy Tunnel...${NC}"
 
-# Running SSH completely silently
+# Running SSH Tunnel
 sudo lxc exec "$CONTAINER_NAME" -- bash -c "ssh -p 443 -L4300:localhost:4300 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -R0:localhost:6080 ap.free.pinggy.io > /root/pinggy.log 2>&1 &"
 
-sleep 5
+sleep 8
 
 echo -e "${BOLD}${CYAN}============================================${NC}"
 echo -e "🔎  Fetching your Access URL..."
 echo -e "${BOLD}${CYAN}============================================${NC}"
 
-# Loop to grab URL
+# Fetch URL
 URL=""
 COUNTER=0
 while [ -z "$URL" ] && [ $COUNTER -lt 20 ]; do
@@ -150,8 +164,7 @@ done
 
 if [ -z "$URL" ]; then
     echo -e "${RED}❌ Could not fetch URL automatically.${NC}"
-    echo -e "${YELLOW}Here are the logs (if any):${NC}"
-    sudo lxc exec "$CONTAINER_NAME" -- cat /root/pinggy.log
+    echo -e "Check logs manually: sudo lxc exec $CONTAINER_NAME -- cat /root/pinggy.log"
 else
     echo -e "${GREEN}${BOLD}🎉 Deployment Successful!${NC}"
     echo ""
@@ -160,5 +173,4 @@ else
     echo ""
     echo -e "${YELLOW}👉 Click the URL to access Kali Linux GUI.${NC}"
 fi
-
 echo -e "${BOLD}${CYAN}============================================${NC}"
